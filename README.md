@@ -16,7 +16,11 @@ cycling loops of that length on safe, quiet roads.
    - road noise (BRouter's estimate of how close you are to busy traffic).
    Around Westerlo this cut the share of each loop on or beside main roads from
    43–59% to 3–16% for road bikes and to 1–6% for gravel.
-3. Each loop is resized until its length is within about 7% of the distance you asked for.
+3. Each loop is resized until its length is within about 7% of the distance you
+   asked for. Out-and-back detours to a turning point are cut out, and if a loop
+   still rides stretches twice, its shape is turned a little (±25°) and the
+   version that doubles back least is kept. In tests around Westerlo, Herentals
+   and Mechelen no loop rode more than 5% of its distance twice.
 4. Each loop is scored:
    - **Quiet**: how much of it is on quiet roads and traffic-free paths rather
      than on or beside main roads.

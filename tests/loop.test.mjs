@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { haversine, destinationPoint } from '../js/geo.js';
 import { buildGrid, decodePolyline, familiarShare, snapToRidden } from '../js/familiar.js';
-import { createProfileStore, loopWaypoints, safetyOf, scoreRoute, toGpx } from '../js/loop.js';
+import { createProfileStore, fetchRoute, loopWaypoints, safetyOf, scoreRoute, toGpx } from '../js/loop.js';
 
 const START = [51.0885, 4.9145];
 
@@ -74,4 +74,20 @@ test('GPX export contains every point', () => {
   const gpx = toGpx({ coords: [[51, 4, 10], [51.001, 4.001, null]] }, 'A & B');
   assert.match(gpx, /<name>A &amp; B<\/name>/);
   assert.equal(gpx.match(/<trkpt /g).length, 2);
+});
+
+test('waits and retries when the routing server is busy', async () => {
+  const geojson = {
+    features: [{
+      geometry: { coordinates: [[4, 51, 10], [4.001, 51.001, 11]] },
+      properties: { 'track-length': '130', 'filtered ascend': '1', 'total-time': '30', messages: [['Longitude', 'Latitude', 'Distance', 'WayTags'], ['4001000', '51001000', '130', 'highway=cycleway']] },
+    }],
+  };
+  const answers = [
+    { ok: false, status: 503, text: async () => 'Please, retry later!' },
+    { ok: true, status: 200, text: async () => JSON.stringify(geojson) },
+  ];
+  const route = await fetchRoute([[51, 4], [51.001, 4.001]], 'p', async () => answers.shift(), [0]);
+  assert.equal(route.lengthM, 130);
+  assert.equal(route.segments[0].tags.highway, 'cycleway');
 });

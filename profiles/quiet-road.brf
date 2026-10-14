@@ -78,6 +78,10 @@ assign considerTurnRestrictions = true   # turn restrictions are considered
 
 assign   validForBikes        1
 
+# remove out-and-back detours to via points
+assign correctMisplacedViaPoints = true
+assign correctMisplacedViaPointsDistance = 0
+
 # the elevation parameters
 
 assign downhillcost  multiply adj_param 60

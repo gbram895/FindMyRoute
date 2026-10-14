@@ -49,13 +49,22 @@ export function loopWaypoints(start, targetM, heading, points = 3, shapeScale = 
   return [start, ...waypoints, start];
 }
 
-export async function fetchRoute(waypoints, profile, fetchImpl = fetch) {
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+export async function fetchRoute(waypoints, profile, fetchImpl = fetch, retryDelays = [2000, 5000, 10000]) {
   const lonlats = waypoints.map(([lat, lon]) => `${lon.toFixed(6)},${lat.toFixed(6)}`).join('|');
   const url = `${BROUTER_URL}?lonlats=${lonlats}&profile=${profile}&alternativeidx=0&format=geojson`;
-  const res = await fetchImpl(url);
-  const text = await res.text();
-  if (!res.ok) throw new Error(text.trim() || `Routing failed (${res.status})`);
-  return parseBrouter(JSON.parse(text));
+  for (let attempt = 0; ; attempt++) {
+    const res = await fetchImpl(url);
+    const text = await res.text();
+    if (res.ok) return parseBrouter(JSON.parse(text));
+    // brouter.de asks busy clients to slow down; wait and try again.
+    if (/retry later/i.test(text) && attempt < retryDelays.length) {
+      await sleep(retryDelays[attempt]);
+      continue;
+    }
+    throw new Error(text.trim() || `Routing failed (${res.status})`);
+  }
 }
 
 export function parseBrouter(geojson) {
@@ -104,7 +113,8 @@ export function safetyOf(tags) {
   if (hw === 'cycleway') return isSidepath(tags) ? 0.65 : 1;
   if (QUIET.has(hw)) {
     const speed = parseInt(tags.maxspeed, 10);
-    return speed >= 70 ? 0.6 : 0.95;
+    // Country lanes signed 70 km/h are still quiet, just a little less so.
+    return speed >= 70 ? 0.8 : 0.95;
   }
   if (MAIN_ROAD.test(hw)) {
     // A separate track beside a main road is safe-ish, but not the quiet road we want.
@@ -178,27 +188,40 @@ export function scoreRoute(route, bike, grid = null, roads = null) {
   if (roads && metrics.familiar !== null) parts.push([0.6, roads === 'mine' ? metrics.familiar : 1 - metrics.familiar]);
   const weight = parts.reduce((s, [w]) => s + w, 0);
   metrics.fun = parts.reduce((s, [w, v]) => s + w * v, 0) / weight;
-  metrics.score = 0.55 * metrics.safety + 0.45 * metrics.fun;
+  // Riding a stretch twice is what makes a loop feel wrong, so it costs extra.
+  metrics.score = 0.55 * metrics.safety + 0.45 * metrics.fun - metrics.overlap;
   return metrics;
 }
 
+// How far a candidate is from what we want: the wrong length, riding stretches
+// twice, or time on and beside main roads.
+const loopPenalty = (error, metrics, tolerance) =>
+  3 * Math.max(0, error - tolerance) + 2 * metrics.overlap + 0.5 * metrics.mainRoadShare;
+
 // Route one loop, rescaling it until its length is within `tolerance` of the target.
-export async function buildLoop({ start, targetM, heading, bike, profiles, grid, roads, fetchImpl = fetch, tolerance = 0.07, maxTries = 4 }) {
+// If the loop still rides stretches twice, turn its shape a little and keep the
+// version that doubles back least.
+export async function buildLoop({ start, targetM, heading, bike, profiles, grid, roads, fetchImpl = fetch, tolerance = 0.07, maxOverlap = 0.03, maxTries = 6 }) {
   let scale = 1;
   let best = null;
+  const turns = [25, -25];
+  let shapeHeading = heading;
   for (let attempt = 0; attempt < maxTries; attempt++) {
-    let waypoints = loopWaypoints(start, targetM, heading, 3, scale);
+    let waypoints = loopWaypoints(start, targetM, shapeHeading, 3, scale);
     if (roads === 'mine' && grid) {
       const searchM = Math.min(4000, (targetM / (2 * Math.PI * ROAD_DETOUR_FACTOR)) * scale * 0.4);
       waypoints = waypoints.map((p, i) => (i === 0 || i === waypoints.length - 1 ? p : snapToRidden(grid, p, searchM)));
     }
     const route = await routeWithProfile(waypoints, bike, profiles, fetchImpl);
     const error = Math.abs(route.lengthM - targetM) / targetM;
-    if (!best || error < best.error) best = { ...route, waypoints, heading, error };
-    if (error <= tolerance) break;
-    scale *= targetM / route.lengthM;
+    const metrics = scoreRoute(route, bike, grid, roads);
+    const penalty = loopPenalty(error, metrics, tolerance);
+    if (!best || penalty < best.penalty) best = { ...route, waypoints, heading: shapeHeading, error, penalty, metrics };
+    if (error > tolerance) scale *= targetM / route.lengthM;
+    else if (metrics.overlap > maxOverlap && turns.length) shapeHeading = (heading + turns.shift() + 360) % 360;
+    else break;
   }
-  return { ...best, metrics: scoreRoute(best, bike, grid, roads) };
+  return best;
 }
 
 async function routeWithProfile(waypoints, bike, profiles, fetchImpl) {
@@ -234,7 +257,9 @@ export async function findLoops({ start, targetM, bike, profiles, grid = null, r
   };
   await Promise.all([worker(), worker()]);
   if (!results.length && errors.length) throw errors[0];
-  return results.sort((a, b) => b.metrics.score - a.metrics.score);
+  // Drop loops far from the asked distance, unless that leaves nothing.
+  const closeEnough = results.filter((r) => r.error <= 0.2);
+  return (closeEnough.length ? closeEnough : results).sort((a, b) => b.metrics.score - a.metrics.score);
 }
 
 // Split the track into runs that share a safety level, for colouring the map.
