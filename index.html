@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FindMyRoute</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22%3E%3Ctext y=%22.9em%22 font-size=%2290%22%3E🚲%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <main class="layout">
+    <aside class="panel">
+      <header>
+        <h1>FindMyRoute</h1>
+        <p class="tagline">Tell it how far you want to ride. Get a loop on safe, quiet roads.</p>
+      </header>
+
+      <form id="plan">
+        <label class="field">
+          <span>Start</span>
+          <div class="row">
+            <input id="search" type="search" placeholder="Search a place, or click the map" autocomplete="off">
+            <button type="button" id="locate" title="Use my location" aria-label="Use my location">◎</button>
+          </div>
+          <small id="start-label" class="hint">No start point yet</small>
+        </label>
+
+        <label class="field">
+          <span>Distance <output id="distance-out">50</output> km</span>
+          <input id="distance" type="range" min="10" max="200" step="5" value="50">
+        </label>
+
+        <fieldset class="field">
+          <legend>Bike</legend>
+          <div class="segmented" id="bike">
+            <label><input type="radio" name="bike" value="road" checked><span>Road</span></label>
+            <label><input type="radio" name="bike" value="gravel"><span>Gravel</span></label>
+            <label><input type="radio" name="bike" value="touring"><span>City / touring</span></label>
+          </div>
+        </fieldset>
+
+        <button id="go" class="primary" type="submit" disabled>Find routes</button>
+        <p id="status" class="hint" role="status"></p>
+      </form>
+
+      <ol id="results" class="results"></ol>
+
+      <footer class="legend">
+        <span><i class="swatch safe"></i>Bike path / quiet road</span>
+        <span><i class="swatch ok"></i>Some traffic</span>
+        <span><i class="swatch busy"></i>Busy road</span>
+      </footer>
+    </aside>
+    <div id="map" class="map"></div>
+  </main>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
