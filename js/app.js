@@ -167,6 +167,8 @@ function setStatus(text) {
 // --- Strava -------------------------------------------------------------
 
 $('callback-domain').textContent = location.hostname;
+// Strava always accepts localhost, whatever callback domain the app has.
+if (['localhost', '127.0.0.1'].includes(location.hostname)) $('callback-step').hidden = true;
 const app = strava.getApp();
 if (app) $('client-id').value = app.clientId;
 

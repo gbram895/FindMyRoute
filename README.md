@@ -36,13 +36,17 @@ Connecting Strava lets the app learn which roads you actually ride:
 - **Discover new** ranks loops on roads you have never ridden higher.
 - Your outdoor rides are drawn on the map (indoor and virtual rides are skipped).
 
-Strava requires every app to have its own API keys, so you create a free
-personal one once:
+Strava requires every app to use API keys from a Strava API app. Strava gives
+each account one API app, so if you already made one for another project, reuse it:
 
-1. Open https://www.strava.com/settings/api and create an app. Any name, category
-   and website will do.
-2. Set **Authorization Callback Domain** to the address you open FindMyRoute on,
-   for example `gbram895.github.io` or `localhost`.
+1. Open https://www.strava.com/settings/api and copy the Client ID and Client Secret.
+2. Check **Authorization Callback Domain**:
+   - Running FindMyRoute on your computer (`localhost`)? Nothing to change:
+     Strava always accepts `localhost`.
+   - Using it on GitHub Pages? The domain must be `gbram895.github.io`. If your
+     other project also runs on `gbram895.github.io`, it already is, and both
+     keep working. If the other project uses a different domain, the two can't
+     share the app online: run FindMyRoute on `localhost` instead.
 3. In FindMyRoute, open **Connect Strava**, paste the Client ID and Client
    Secret, and approve access.
 
