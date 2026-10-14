@@ -9,6 +9,8 @@
   --safe: #1a9850;
   --ok: #f0a202;
   --busy: #d73027;
+  --rides: #7b3fe4;
+  --strava: #fc4c02;
   --selected: #fff4ed;
 }
 
@@ -24,6 +26,7 @@
 }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 
 html, body { height: 100%; margin: 0; }
 
@@ -60,7 +63,7 @@ form { display: flex; flex-direction: column; gap: 16px; }
 
 .row { display: flex; gap: 6px; }
 
-input[type="search"] {
+input[type="search"], .stack input {
   flex: 1;
   min-width: 0;
   padding: 9px 10px;
@@ -127,6 +130,18 @@ button.primary {
 .swatch.safe { background: var(--safe); }
 .swatch.ok { background: var(--ok); }
 .swatch.busy { background: var(--busy); }
+.swatch.rides { background: var(--rides); }
+
+.strava { border-top: 1px solid var(--border); padding-top: 16px; display: flex; flex-direction: column; gap: 10px; }
+.strava h2 { font-size: 16px; margin: 0; }
+.strava summary { cursor: pointer; font-weight: 600; color: var(--strava); }
+.strava a { color: var(--strava); }
+.steps { padding-left: 20px; margin: 10px 0; font-size: 13px; display: flex; flex-direction: column; gap: 4px; }
+.steps code { background: var(--bg); padding: 1px 4px; border-radius: 4px; word-break: break-all; }
+.stack { display: flex; flex-direction: column; gap: 8px; }
+.strava-btn { background: var(--strava); border-color: var(--strava); color: #fff; font-weight: 600; }
+.check { display: flex; gap: 8px; align-items: center; font-size: 14px; }
+.check input { accent-color: var(--accent); }
 
 @media (max-width: 720px) {
   .layout { flex-direction: column-reverse; }

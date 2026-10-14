@@ -1,17 +1,23 @@
-import { BIKE_PROFILES, findLoops, safetyRuns, toGpx } from './loop.js';
+import { BIKE_PROFILES, createProfileStore, findLoops, safetyRuns, toGpx } from './loop.js';
+import { buildGrid, decodePolyline } from './familiar.js';
+import * as strava from './strava.js';
 
-const COLORS = { safe: '#1a9850', ok: '#f0a202', busy: '#d73027' };
+const COLORS = { safe: '#1a9850', ok: '#f0a202', busy: '#d73027', rides: '#7b3fe4' };
 const $ = (id) => document.getElementById(id);
 
-const map = L.map('map').setView([51.0885, 4.9145], 11);
+const map = L.map('map', { preferCanvas: true }).setView([51.0885, 4.9145], 11);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
   maxZoom: 19,
   attribution: '&copy; OpenStreetMap contributors · routing by BRouter',
 }).addTo(map);
 
+const profiles = createProfileStore((file) => fetch(file).then((r) => r.text()));
+
 let start = null;
 let startMarker = null;
 let routeLayer = null;
+let ridesLayer = null;
+let grid = null;
 let loops = [];
 
 function setStart(latlng, label) {
@@ -62,8 +68,10 @@ $('distance').addEventListener('input', (e) => ($('distance-out').textContent = 
 $('plan').addEventListener('submit', async (e) => {
   e.preventDefault();
   if (!start) return;
+  const form = new FormData(e.target);
   const targetM = Number($('distance').value) * 1000;
-  const bike = new FormData(e.target).get('bike');
+  const bike = form.get('bike');
+  const roads = grid ? form.get('roads') : null;
   $('go').disabled = true;
   $('results').replaceChildren();
   clearRoute();
@@ -73,11 +81,14 @@ $('plan').addEventListener('submit', async (e) => {
       start,
       targetM,
       bike,
+      profiles,
+      grid,
+      roads,
       onProgress: (done, total) => setStatus(`Routing loops… ${done}/${total}`),
     });
     if (!loops.length) setStatus('No routes found here. Try another start point or distance.');
     else {
-      setStatus(`${loops.length} loops for ${BIKE_PROFILES[bike].label.toLowerCase()}, safest and most fun first.`);
+      setStatus(`${loops.length} ${BIKE_PROFILES[bike].label.toLowerCase()} loops, quietest and most fun first.`);
       renderResults();
       showRoute(0);
     }
@@ -95,6 +106,13 @@ function renderResults() {
   $('results').replaceChildren(
     ...loops.map((loop, i) => {
       const m = loop.metrics;
+      const details = [
+        `${pct(m.mainRoadShare)} along main roads`,
+        `${pct(m.networkShare)} on signed cycle routes`,
+        `${pct(m.unpavedShare)} unpaved`,
+      ];
+      if (m.familiar !== null) details.unshift(`${pct(m.familiar)} on roads you've ridden`);
+      if (m.overlap > 0.05) details.push(`${pct(m.overlap)} ridden twice`);
       const li = document.createElement('li');
       li.className = 'result';
       li.tabIndex = 0;
@@ -104,10 +122,10 @@ function renderResults() {
           <span class="result-meta">heads ${compass(loop.heading)} · ↑${loop.ascendM} m · ~${Math.round(loop.timeS / 60)} min</span>
         </div>
         <div class="bars">
-          <span>Safety</span><span class="bar"><i style="width:${pct(m.safety)}"></i></span><span>${pct(m.safety)}</span>
+          <span>Quiet</span><span class="bar"><i style="width:${pct(m.safety)}"></i></span><span>${pct(m.safety)}</span>
           <span>Fun</span><span class="bar"><i style="width:${pct(m.fun)}"></i></span><span>${pct(m.fun)}</span>
         </div>
-        <div class="result-meta">${pct(m.networkShare)} on signed cycle routes · ${pct(m.busyShare)} on busy roads · ${pct(m.unpavedShare)} unpaved${m.overlap > 0.05 ? ` · ${pct(m.overlap)} ridden twice` : ''}</div>
+        <div class="result-meta">${details.join(' · ')}</div>
         <div class="result-actions"><button type="button" data-gpx>Download GPX</button></div>`;
       li.addEventListener('click', () => showRoute(i));
       li.addEventListener('keydown', (ev) => ev.key === 'Enter' && showRoute(i));
@@ -145,3 +163,80 @@ function downloadGpx(loop, i) {
 function setStatus(text) {
   $('status').textContent = text;
 }
+
+// --- Strava -------------------------------------------------------------
+
+$('callback-domain').textContent = location.hostname;
+const app = strava.getApp();
+if (app) $('client-id').value = app.clientId;
+
+$('strava-form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  strava.startConnect($('client-id').value, $('client-secret').value);
+});
+
+$('sync').addEventListener('click', () => syncStrava());
+
+$('disconnect').addEventListener('click', () => {
+  strava.disconnect();
+  loadRides();
+});
+
+$('show-rides').addEventListener('change', () => drawRides());
+
+async function syncStrava() {
+  $('sync').disabled = true;
+  $('strava-summary').textContent = 'Downloading your rides from Strava…';
+  try {
+    await strava.syncRides((n) => ($('strava-summary').textContent = `Downloading your rides… ${n} so far`));
+    loadRides();
+  } catch (err) {
+    loadRides();
+    $('strava-summary').textContent = err.message;
+  } finally {
+    $('sync').disabled = false;
+  }
+}
+
+function loadRides() {
+  const connected = strava.isConnected();
+  const rides = connected ? strava.getRides() : [];
+  $('strava-off').hidden = connected;
+  $('strava-on').hidden = !connected;
+  $('roads-field').hidden = !rides.length;
+  $('legend-rides').hidden = !rides.length;
+  const lines = rides.map((r) => decodePolyline(r.polyline));
+  grid = lines.length ? buildGrid(lines) : null;
+  ridesLayer = lines.length
+    ? L.featureGroup(lines.map((pts) => L.polyline(pts, { color: COLORS.rides, weight: 3, opacity: 0.45, interactive: false })))
+    : null;
+  drawRides();
+  if (connected) {
+    const newest = rides.reduce((d, r) => (r.date > d ? r.date : d), '');
+    $('strava-summary').textContent = rides.length
+      ? `${rides.length} outdoor ride${rides.length === 1 ? '' : 's'} loaded${newest ? `, newest ${newest.slice(0, 10)}` : ''}.`
+      : 'Connected. No outdoor rides with GPS found yet.';
+  }
+}
+
+let drawnRides = null;
+function drawRides() {
+  if (drawnRides) map.removeLayer(drawnRides);
+  drawnRides = $('show-rides').checked && ridesLayer ? ridesLayer.addTo(map) : null;
+  if (drawnRides) drawnRides.bringToBack();
+}
+
+(async () => {
+  try {
+    if (await strava.handleRedirect()) {
+      loadRides();
+      await syncStrava();
+      if (ridesLayer) map.fitBounds(ridesLayer.getBounds());
+      return;
+    }
+  } catch (err) {
+    $('strava-setup').open = true;
+    setStatus(err.message);
+  }
+  loadRides();
+})();

@@ -1,35 +1,39 @@
 // Core route-finding logic: no DOM, so it runs in the browser and in Node tests.
 
+import { destinationPoint, haversine } from './geo.js';
+import { familiarShare, snapToRidden } from './familiar.js';
+
 const BROUTER_URL = 'https://brouter.de/brouter';
-const EARTH_RADIUS_M = 6371000;
-const toRad = (d) => (d * Math.PI) / 180;
-const toDeg = (r) => (r * 180) / Math.PI;
 
 // Roads usually wind more than a straight line between waypoints.
 const ROAD_DETOUR_FACTOR = 1.3;
 
+// Custom BRouter profiles (see profiles/) that keep away from main roads, cycle
+// paths running alongside them, and road noise.
 export const BIKE_PROFILES = {
-  road: { label: 'Road bike', profile: 'fastbike-verylowtraffic' },
-  gravel: { label: 'Gravel', profile: 'gravel' },
-  touring: { label: 'City / touring', profile: 'safety' },
+  road: { label: 'Road bike', file: 'profiles/quiet-road.brf' },
+  gravel: { label: 'Gravel', file: 'profiles/quiet-gravel.brf' },
 };
 
-// Point reached by going `distanceM` metres from [lat, lon] on compass bearing `bearingDeg`.
-export function destinationPoint([lat, lon], bearingDeg, distanceM) {
-  const d = distanceM / EARTH_RADIUS_M;
-  const b = toRad(bearingDeg);
-  const la1 = toRad(lat);
-  const lo1 = toRad(lon);
-  const la2 = Math.asin(Math.sin(la1) * Math.cos(d) + Math.cos(la1) * Math.sin(d) * Math.cos(b));
-  const lo2 = lo1 + Math.atan2(Math.sin(b) * Math.sin(d) * Math.cos(la1), Math.cos(d) - Math.sin(la1) * Math.sin(la2));
-  return [toDeg(la2), ((toDeg(lo2) + 540) % 360) - 180];
-}
-
-export function haversine([lat1, lon1], [lat2, lon2]) {
-  const dLat = toRad(lat2 - lat1);
-  const dLon = toRad(lon2 - lon1);
-  const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
-  return 2 * EARTH_RADIUS_M * Math.asin(Math.sqrt(a));
+// Uploads a profile to BRouter once and remembers the id it hands back. The server
+// forgets custom profiles after a while, so `forget` lets callers upload again.
+export function createProfileStore(loadProfileText, fetchImpl = fetch) {
+  const ids = new Map();
+  return {
+    async get(bike) {
+      if (!ids.has(bike)) {
+        const text = await loadProfileText(BIKE_PROFILES[bike].file);
+        const res = await fetchImpl(`${BROUTER_URL}/profile`, { method: 'POST', body: text });
+        const body = await res.json();
+        if (!body.profileid) throw new Error(body.error || 'Could not upload routing profile');
+        ids.set(bike, body.profileid);
+      }
+      return ids.get(bike);
+    },
+    forget(bike) {
+      ids.delete(bike);
+    },
+  };
 }
 
 // Waypoints for a loop: the start sits on a circle whose centre lies `heading` away;
@@ -84,31 +88,35 @@ function parseTags(str) {
   return tags;
 }
 
-const SEPARATED = new Set(['cycleway', 'path', 'track', 'pedestrian', 'living_street', 'footway', 'bridleway']);
-const QUIET = new Set(['residential', 'service', 'unclassified', 'road']);
-const BUSY = new Set(['primary', 'primary_link', 'trunk', 'trunk_link', 'motorway']);
+const MAIN_ROAD = /^(tertiary|secondary|primary|trunk|motorway)/;
+const QUIET = new Set(['residential', 'service', 'unclassified', 'road', 'track', 'path', 'living_street', 'pedestrian', 'footway', 'bridleway']);
 
-// 0 (dangerous) .. 1 (traffic-free) for one way, based on its OSM tags.
+// One-way cycle paths are nearly always sidepaths mapped next to a main road.
+const isSidepath = (tags) => tags.highway === 'cycleway' && ['yes', '-1'].includes(tags.oneway);
+
+const hasCycleTrack = (tags) =>
+  ['cycleway', 'cycleway:both', 'cycleway:left', 'cycleway:right'].some((k) => ['track', 'separate'].includes(tags[k]));
+
+// 0 (in heavy traffic) .. 1 (quiet, away from cars) for one way, based on its OSM tags.
 export function safetyOf(tags) {
   const hw = tags.highway;
   if (tags.bicycle_road === 'yes' || tags.cyclestreet === 'yes') return 1;
-  if (SEPARATED.has(hw)) return 1;
-  const cycleway = ['cycleway', 'cycleway:both', 'cycleway:left', 'cycleway:right'].map((k) => tags[k]).filter(Boolean);
-  const hasTrack = cycleway.includes('track') || cycleway.includes('separate');
-  const hasLane = cycleway.includes('lane') || cycleway.includes('shared_lane');
-  const speed = parseInt(tags.maxspeed, 10);
-  let score;
-  if (QUIET.has(hw)) score = 0.85;
-  else if (hw === 'tertiary' || hw === 'tertiary_link') score = 0.6;
-  else if (hw === 'secondary' || hw === 'secondary_link') score = 0.35;
-  else if (BUSY.has(hw)) score = 0.1;
-  else score = 0.6;
-  if (hasTrack) score = Math.max(score, 0.9);
-  else if (hasLane) score = Math.min(1, score + 0.15);
-  if (speed && speed <= 30) score = Math.min(1, score + 0.1);
-  if (speed && speed >= 70) score = Math.max(0, score - 0.2);
-  return score;
+  if (hw === 'cycleway') return isSidepath(tags) ? 0.65 : 1;
+  if (QUIET.has(hw)) {
+    const speed = parseInt(tags.maxspeed, 10);
+    return speed >= 70 ? 0.6 : 0.95;
+  }
+  if (MAIN_ROAD.test(hw)) {
+    // A separate track beside a main road is safe-ish, but not the quiet road we want.
+    if (hasCycleTrack(tags)) return 0.65;
+    if (/^tertiary/.test(hw)) return 0.45;
+    if (/^secondary/.test(hw)) return 0.25;
+    return 0.1;
+  }
+  return 0.8;
 }
+
+export const safetyLevel = (safety) => (safety >= 0.8 ? 'safe' : safety >= 0.5 ? 'ok' : 'busy');
 
 const isCycleRoute = (tags) => Object.keys(tags).some((k) => k.startsWith('route_bicycle_'));
 const isUnpaved = (tags) =>
@@ -134,73 +142,119 @@ export function overlapShare(coords) {
 
 const cellKey = ([lat, lon]) => `${Math.round(lat * 4000)},${Math.round(lon * 4000)}`; // ~25 m grid
 
-export function scoreRoute(route, bike) {
+// `roads` is 'mine' (prefer roads from the athlete's rides), 'new' (prefer roads
+// they have never ridden) or null when no rides are loaded.
+export function scoreRoute(route, bike, grid = null, roads = null) {
   let total = 0;
   let safe = 0;
   let network = 0;
   let unpaved = 0;
-  let busy = 0;
+  let mainRoad = 0;
   for (const s of route.segments) {
     total += s.distance;
     const safety = safetyOf(s.tags);
     safe += safety * s.distance;
-    if (safety < 0.4) busy += s.distance;
+    if (safety < 0.8) mainRoad += s.distance;
     if (isCycleRoute(s.tags)) network += s.distance;
     if (isUnpaved(s.tags)) unpaved += s.distance;
   }
   total = total || 1;
   const metrics = {
     safety: safe / total,
-    busyShare: busy / total,
+    mainRoadShare: mainRoad / total,
     networkShare: network / total,
     unpavedShare: unpaved / total,
     overlap: overlapShare(route.coords),
+    familiar: grid ? familiarShare(grid, route.coords) : null,
   };
   // "Fun": a real loop (little doubling back) along signed cycle routes, with the
-  // surface the bike is made for.
-  const surfaceFit = bike === 'gravel' ? Math.min(1, metrics.unpavedShare * 2) : bike === 'road' ? 1 - metrics.unpavedShare : 1;
-  metrics.fun = 0.5 * (1 - metrics.overlap) + 0.3 * metrics.networkShare + 0.2 * surfaceFit;
-  metrics.score = 0.6 * metrics.safety + 0.4 * metrics.fun;
+  // surface the bike is made for, and on the athlete's favourite (or new) roads.
+  const surfaceFit = bike === 'gravel' ? Math.min(1, metrics.unpavedShare * 2) : 1 - metrics.unpavedShare;
+  const parts = [
+    [0.5, 1 - metrics.overlap],
+    [0.3, metrics.networkShare],
+    [0.2, surfaceFit],
+  ];
+  if (roads && metrics.familiar !== null) parts.push([0.6, roads === 'mine' ? metrics.familiar : 1 - metrics.familiar]);
+  const weight = parts.reduce((s, [w]) => s + w, 0);
+  metrics.fun = parts.reduce((s, [w, v]) => s + w * v, 0) / weight;
+  metrics.score = 0.55 * metrics.safety + 0.45 * metrics.fun;
   return metrics;
 }
 
 // Route one loop, rescaling it until its length is within `tolerance` of the target.
-export async function buildLoop({ start, targetM, heading, bike, fetchImpl, tolerance = 0.07, maxTries = 4 }) {
-  const { profile } = BIKE_PROFILES[bike];
+export async function buildLoop({ start, targetM, heading, bike, profiles, grid, roads, fetchImpl = fetch, tolerance = 0.07, maxTries = 4 }) {
   let scale = 1;
   let best = null;
   for (let attempt = 0; attempt < maxTries; attempt++) {
-    const waypoints = loopWaypoints(start, targetM, heading, 3, scale);
-    const route = await fetchRoute(waypoints, profile, fetchImpl);
+    let waypoints = loopWaypoints(start, targetM, heading, 3, scale);
+    if (roads === 'mine' && grid) {
+      const searchM = Math.min(4000, (targetM / (2 * Math.PI * ROAD_DETOUR_FACTOR)) * scale * 0.4);
+      waypoints = waypoints.map((p, i) => (i === 0 || i === waypoints.length - 1 ? p : snapToRidden(grid, p, searchM)));
+    }
+    const route = await routeWithProfile(waypoints, bike, profiles, fetchImpl);
     const error = Math.abs(route.lengthM - targetM) / targetM;
     if (!best || error < best.error) best = { ...route, waypoints, heading, error };
     if (error <= tolerance) break;
     scale *= targetM / route.lengthM;
   }
-  return { ...best, metrics: scoreRoute(best, bike) };
+  return { ...best, metrics: scoreRoute(best, bike, grid, roads) };
+}
+
+async function routeWithProfile(waypoints, bike, profiles, fetchImpl) {
+  try {
+    return await fetchRoute(waypoints, await profiles.get(bike), fetchImpl);
+  } catch {
+    // The server answers an empty 500 once it has dropped an uploaded profile, which
+    // looks like any other failure: upload the profile again and retry once.
+    profiles.forget(bike);
+    return fetchRoute(waypoints, await profiles.get(bike), fetchImpl);
+  }
 }
 
 // Try loops leaving in different directions and return them best first.
-export async function findLoops({ start, targetM, bike, directions = 6, fetchImpl = fetch, onProgress = () => {} }) {
+export async function findLoops({ start, targetM, bike, profiles, grid = null, roads = null, directions = 6, fetchImpl = fetch, onProgress = () => {} }) {
+  await profiles.get(bike);
   const offset = Math.random() * 360;
-  const headings = Array.from({ length: directions }, (_, i) => (offset + (360 / directions) * i) % 360);
+  const queue = Array.from({ length: directions }, (_, i) => (offset + (360 / directions) * i) % 360);
   const results = [];
+  const errors = [];
   let done = 0;
   // Two at a time: brouter.de is a free community server.
-  const queue = [...headings];
   const worker = async () => {
     while (queue.length) {
       const heading = queue.shift();
       try {
-        results.push(await buildLoop({ start, targetM, heading, bike, fetchImpl }));
+        results.push(await buildLoop({ start, targetM, heading, bike, profiles, grid, roads, fetchImpl }));
       } catch (err) {
-        console.warn('Loop failed', heading, err);
+        errors.push(err);
       }
       onProgress(++done, directions);
     }
   };
   await Promise.all([worker(), worker()]);
+  if (!results.length && errors.length) throw errors[0];
   return results.sort((a, b) => b.metrics.score - a.metrics.score);
+}
+
+// Split the track into runs that share a safety level, for colouring the map.
+export function safetyRuns(route) {
+  const runs = [];
+  let seg = 0;
+  let current = null;
+  for (const [lat, lon] of route.coords) {
+    const s = route.segments[Math.min(seg, route.segments.length - 1)];
+    const level = safetyLevel(s ? safetyOf(s.tags) : 1);
+    if (!current || current.level !== level) {
+      const prev = current && current.coords[current.coords.length - 1];
+      current = { level, coords: prev ? [prev] : [] };
+      runs.push(current);
+    }
+    current.coords.push([lat, lon]);
+    // Message rows mark where each way ends; move on once we reach that point.
+    if (s && Math.abs(s.lat - lat) < 2e-6 && Math.abs(s.lon - lon) < 2e-6) seg++;
+  }
+  return runs;
 }
 
 export function toGpx(route, name = 'FindMyRoute loop') {
@@ -218,25 +272,4 @@ ${pts}
   </trk>
 </gpx>
 `;
-}
-
-// Split the track into runs that share a safety level, for colouring the map.
-export function safetyRuns(route) {
-  const runs = [];
-  let seg = 0;
-  let current = null;
-  for (const [lat, lon] of route.coords) {
-    const s = route.segments[Math.min(seg, route.segments.length - 1)];
-    const safety = s ? safetyOf(s.tags) : 1;
-    const level = safety >= 0.8 ? 'safe' : safety >= 0.5 ? 'ok' : 'busy';
-    if (!current || current.level !== level) {
-      const prev = current && current.coords[current.coords.length - 1];
-      current = { level, coords: prev ? [prev] : [] };
-      runs.push(current);
-    }
-    current.coords.push([lat, lon]);
-    // Message rows mark where each way ends; move on once we reach that point.
-    if (s && Math.abs(s.lat - lat) < 2e-6 && Math.abs(s.lon - lon) < 2e-6) seg++;
-  }
-  return runs;
 }

@@ -8,20 +8,46 @@ cycling loops of that length on safe, quiet roads.
 1. Pick a start point (click the map, search a place or use your location), a
    distance and your bike type.
 2. The app draws loops heading off in 6 directions and routes each one with
-   [BRouter](https://brouter.de) on OpenStreetMap data, using a low-traffic
-   bike profile:
-   - Road: `fastbike-verylowtraffic`
-   - Gravel: `gravel`
-   - City / touring: `safety`
+   [BRouter](https://brouter.de) on OpenStreetMap data. It uses its own routing
+   profiles in `profiles/`, based on BRouter's `fastbike-verylowtraffic` (road)
+   and `gravel` profiles, tuned to stay away from:
+   - main roads (N-roads and other tertiary, secondary and primary roads);
+   - one-way cycle paths, which nearly always run right beside a main road;
+   - road noise (BRouter's estimate of how close you are to busy traffic).
+   Around Westerlo this cut the share of each loop on or beside main roads from
+   43–59% to 3–16% for road bikes and to 1–6% for gravel.
 3. Each loop is resized until its length is within about 7% of the distance you asked for.
 4. Each loop is scored:
-   - **Safety**: how much of the distance is on bike paths, cycle streets, quiet
-     roads or roads with a separate cycle track, compared with busy main roads.
-   - **Fun**: little doubling back, a large share on signed cycle routes (such
-     as the Belgian *fietsknooppunten*) and the right surface for your bike.
-5. The loops are listed best first. The map colours each route green (bike
-   path or quiet road), orange (some traffic) or red (busy road). Any loop can
-   be downloaded as a GPX file for Garmin, Wahoo, Strava, Komoot and similar apps.
+   - **Quiet**: how much of it is on quiet roads and traffic-free paths rather
+     than on or beside main roads.
+   - **Fun**: little doubling back, signed cycle routes (such as the Belgian
+     *fietsknooppunten*), the right surface for your bike and, when Strava is
+     connected, your favourite roads (or roads you have never ridden).
+5. The loops are listed best first. The map colours each route green (quiet),
+   orange (beside a main road) or red (in traffic). Any loop can be downloaded
+   as a GPX file.
+
+## Connecting Strava
+
+Connecting Strava lets the app learn which roads you actually ride:
+
+- **Roads I ride** moves each loop's turning points onto roads you ride often,
+  and ranks loops by how much of them you already know.
+- **Discover new** ranks loops on roads you have never ridden higher.
+- Your outdoor rides are drawn on the map (indoor and virtual rides are skipped).
+
+Strava requires every app to have its own API keys, so you create a free
+personal one once:
+
+1. Open https://www.strava.com/settings/api and create an app. Any name, category
+   and website will do.
+2. Set **Authorization Callback Domain** to the address you open FindMyRoute on,
+   for example `gbram895.github.io` or `localhost`.
+3. In FindMyRoute, open **Connect Strava**, paste the Client ID and Client
+   Secret, and approve access.
+
+The keys, login tokens and downloaded rides are stored only in your browser
+(localStorage). Nothing is sent anywhere except Strava itself.
 
 ## Running it
 
@@ -36,6 +62,9 @@ It can also be hosted on GitHub Pages.
 
 ## Files
 
-- `js/loop.js`: loop geometry, BRouter calls, safety and fun scoring, GPX export
-  (no DOM, so it also runs in Node).
+- `js/loop.js`: loop geometry, BRouter calls, quiet and fun scoring, GPX export.
+- `js/familiar.js`: grid of the roads in your Strava rides, used for snapping and scoring.
+- `js/strava.js`: Strava login and ride download, in the browser.
 - `js/app.js`: map and user interface (Leaflet).
+- `profiles/`: the custom BRouter routing profiles.
+- `tests/`: unit tests, run with `npm test` (Node 20 or newer).

@@ -13,7 +13,7 @@
     <aside class="panel">
       <header>
         <h1>FindMyRoute</h1>
-        <p class="tagline">Tell it how far you want to ride. Get a loop on safe, quiet roads.</p>
+        <p class="tagline">Tell it how far you want to ride. Get a loop on quiet roads, away from traffic.</p>
       </header>
 
       <form id="plan">
@@ -36,7 +36,14 @@
           <div class="segmented" id="bike">
             <label><input type="radio" name="bike" value="road" checked><span>Road</span></label>
             <label><input type="radio" name="bike" value="gravel"><span>Gravel</span></label>
-            <label><input type="radio" name="bike" value="touring"><span>City / touring</span></label>
+          </div>
+        </fieldset>
+
+        <fieldset class="field" id="roads-field" hidden>
+          <legend>Roads</legend>
+          <div class="segmented">
+            <label><input type="radio" name="roads" value="mine" checked><span>Roads I ride</span></label>
+            <label><input type="radio" name="roads" value="new"><span>Discover new</span></label>
           </div>
         </fieldset>
 
@@ -46,10 +53,41 @@
 
       <ol id="results" class="results"></ol>
 
+      <section class="strava" aria-labelledby="strava-title">
+        <h2 id="strava-title">Your Strava rides</h2>
+
+        <div id="strava-off">
+          <p class="hint">Connect Strava so routes follow the roads you already ride, or find new ones. Your rides stay in this browser.</p>
+          <details id="strava-setup">
+            <summary>Connect Strava</summary>
+            <ol class="steps">
+              <li>Open <a href="https://www.strava.com/settings/api" target="_blank" rel="noopener">strava.com/settings/api</a> and create an app (any name and website).</li>
+              <li>Set <b>Authorization Callback Domain</b> to <code id="callback-domain"></code>.</li>
+              <li>Paste the app's Client ID and Client Secret here.</li>
+            </ol>
+            <form id="strava-form" class="stack">
+              <input id="client-id" placeholder="Client ID" inputmode="numeric" required>
+              <input id="client-secret" placeholder="Client Secret" type="password" required>
+              <button type="submit" class="strava-btn">Connect with Strava</button>
+            </form>
+          </details>
+        </div>
+
+        <div id="strava-on" hidden>
+          <p id="strava-summary" class="hint"></p>
+          <label class="check"><input type="checkbox" id="show-rides" checked> Show my rides on the map</label>
+          <div class="row">
+            <button type="button" id="sync">Sync new rides</button>
+            <button type="button" id="disconnect">Disconnect</button>
+          </div>
+        </div>
+      </section>
+
       <footer class="legend">
         <span><i class="swatch safe"></i>Bike path / quiet road</span>
-        <span><i class="swatch ok"></i>Some traffic</span>
-        <span><i class="swatch busy"></i>Busy road</span>
+        <span><i class="swatch ok"></i>Along a main road</span>
+        <span><i class="swatch busy"></i>In traffic</span>
+        <span id="legend-rides" hidden><i class="swatch rides"></i>Your rides</span>
       </footer>
     </aside>
     <div id="map" class="map"></div>
